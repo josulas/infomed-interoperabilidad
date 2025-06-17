@@ -11,7 +11,12 @@ from fhir.resources.coverage import Coverage
 from fhir.resources.identifier import Identifier
 
 from patient import create_patient_resource
-from base import send_resource_to_hapi_fhir, get_resource_from_hapi_fhir, get_resource_by_identifier
+from base import (send_resource_to_hapi_fhir,
+                  get_resource_from_hapi_fhir,
+                  get_resource_by_identifier,
+                  edit_resource_in_hapi_fhir,
+                  get_coverage_by_beneficiary,
+                  delete_resource_from_hapi_fhir)
 from coverage import create_coverage_resource
 
 
@@ -132,12 +137,24 @@ def input_non_void(msg: str) -> str:
             print("El valor no puede estar vacío. Inténtelo de nuevo.")
 
 # Punto A
-def create_patient() -> None:
+def create_or_edit_patient() -> None:
     """
-    Crea un recurso FHIR de paciente y lo envía al servidor HAPI FHIR.
+    Crea o edita un recurso FHIR de paciente y lo envía al servidor HAPI FHIR.
     :return: El ID del paciente creado o None si hubo un error.
     """
     patient_dni = input_dni()
+    # Verificar si el paciente ya existe
+    existing_resources = get_resource_by_identifier(patient_dni, Patient.get_resource_type())
+    if existing_resources:
+        print(f"Ya existe un paciente con DNI {patient_dni}.")
+        input_choice = input("¿Desea editar el paciente existente? (s/n): ").strip().lower()
+        if input_choice != 's':
+            print("Operación cancelada.")
+            return
+    if existing_resources[0].id is None:
+        print(f"El paciente con DNI {patient_dni} no tiene un ID válido. No se puede editar.")
+        return
+    # Ingresamos los datos del paciente
     family_name = input_non_void("Ingrese el apellido del paciente: ")
     given_name = input_non_void("Ingrese el nombre del paciente: ")
     gender = input_gender()
@@ -155,16 +172,51 @@ def create_patient() -> None:
     dni_identifier.system = "http://www.renaper.gob.ar/dni"
     dni_identifier.value = patient_dni
     patient_resource.identifier = [dni_identifier]
-    # Enviamos el recurso de paciente al servidor HAPI FHIR
-    created_id = send_resource_to_hapi_fhir(patient_resource)
-    if not created_id:
-        print("Error al crear el paciente")
+    # Si el paciente ya existe, editamos el recurso
+    if existing_resources:
+        patient_resource.id = existing_resources[0].id
+        print(f"Editando el paciente con DNI {patient_dni}...")
+        if not edit_resource_in_hapi_fhir(patient_resource):
+            print("Error al editar el paciente")
+        else:
+            print("Paciente editado exitosamente")
+            print("Detalles del paciente:")
+            resource = get_resource_from_hapi_fhir(patient_resource.id, Patient.get_resource_type())
+            for key, value in resource.items():
+                print(f"{key}: {value}")
     else:
-        print("Paciente creado exitosamente")
-        print("Detalles del paciente:")
-        resource = get_resource_from_hapi_fhir(created_id, Patient.get_resource_type())
-        for key, value in resource.items():
-            print(f"{key}: {value}")
+        # Enviamos el recurso de paciente al servidor HAPI FHIR
+        created_id = send_resource_to_hapi_fhir(patient_resource)
+        if not created_id:
+            print("Error al crear el paciente")
+        else:
+            print("Paciente creado exitosamente")
+            print("Detalles del paciente:")
+            resource = get_resource_from_hapi_fhir(created_id, Patient.get_resource_type())
+            for key, value in resource.items():
+                print(f"{key}: {value}")
+
+
+def input_coverage_status() -> str:
+    """
+    Solicita al usuario que ingrese el estado de la cobertura.
+    :return: El estado de la cobertura ingresado por el usuario.
+    """
+    options = {
+        "1": "active",
+        "2": "cancelled",
+        "3": "draft",
+        "4": "entered-in-error"
+    }
+    print("\nSeleccione el estado de la cobertura:")
+    for key, value in options.items():
+        print(f"{key}. {value}")
+    while True:
+        choice = input("Ingrese su opción (1-4): ").strip()
+        if choice in options:
+            return options[choice]
+        else:
+            print("Opción inválida. Debe ser 1, 2, 3 o 4.")
 
 
 # Punto B
@@ -173,7 +225,7 @@ def search_patient_by_dni() -> None:
     Busca un paciente por su DNI en el servidor HAPI FHIR.
     :param dni: El DNI del paciente a buscar.
     """
-    search_dni = input_non_void("Ingrese el DNI del paciente a buscar: ")
+    search_dni = input_dni()
     resources = get_resource_by_identifier(search_dni, Patient.get_resource_type())
     if not resources:
         print(f"No se encontró el paciente con DNI {search_dni}.")
@@ -187,11 +239,11 @@ def search_patient_by_dni() -> None:
 
 
 # Punto C
-def add_patient_coverage():
+def add_or_edit_patient_coverages() -> None:
     """
     Agrega cobertura a un paciente existente.
     """
-    patient_dni = input_non_void("Ingrese el DNI del paciente para agregar cobertura: ")
+    patient_dni = input_dni()
     patient_resources = get_resource_by_identifier(patient_dni, Patient.get_resource_type())
     if not patient_resources:
         print(f"No se encontró el paciente con DNI {patient_dni}.")
@@ -201,35 +253,115 @@ def add_patient_coverage():
     if not patient_id:
         print(f"Error: El paciente con DNI {patient_dni} no tiene un ID válido.")
         return
-    print(f"Paciente con DNI {patient_dni} encontrado. Puede proceder a agregar cobertura.")
+    # Primero buscamos si hay una cobertura existente para este paciente
+    coverage_resources = get_coverage_by_beneficiary(
+        beneficiary_resource_type=Patient.get_resource_type(),
+        beneficiary_resource_id=patient_id
+    )
+    edited_coverage_id: str | None = None
+    if coverage_resources:
+        print(f"El paciente con DNI {patient_dni} ya tiene cobertura(s) existente(s):")
+        for coverage in coverage_resources:
+            for key, value in coverage.model_dump().items():
+                print(f"{key}: {value}")
+        options = {
+            str(i + 1): coverage.id for i, coverage in enumerate(coverage_resources)
+        }
+        for key, value in options.items():
+            print(f"{key}. ID de cobertura: {value}")
+        print("Seleccione una cobertura para editar o presione Enter para agregar una nueva:")
+        done = False
+        while not done:
+            choice = input(f"Ingrese su opción (1-{len(options)}): ").strip()
+            if choice in options:
+                edited_coverage_id = options[choice]
+                print(f"Editando la cobertura con ID {edited_coverage_id}...")
+                done = True
+            elif choice == "":
+                print("Agregando nueva cobertura...")
+                done = True
+            else:
+                print(f"Opción inválida. Debe ser un número entre 1 y {len(options)} o presione Enter.")
+    if edited_coverage_id:
+        # Editar o eliminar la cobertura existente
+        delete_choice = input("¿Desea eliminar la cobertura existente? (s/n): ").strip().lower()
+        if delete_choice == 's':
+            if delete_resource_from_hapi_fhir(edited_coverage_id, Coverage.get_resource_type()):
+                print("Cobertura eliminada exitosamente.")
+            else:
+                print("Error al eliminar la cobertura.")
+            return
     coverage_type, coverage_type_display = input_coverage_type()
+    coverage_status = input_coverage_status()
     policy_identifier = input_policy_identifier()
     subscriber_id = input_subscriber_id()
     start_date = input_date("Ingrese la fecha de inicio de la cobertura")
     end_date = input_date("Ingrese la fecha de fin de la cobertura")
     # Crear el recurso de cobertura referenciando al paciente
     coverage_resource = create_coverage_resource(
-        beneficiary_resource_type="Patient",
+        beneficiary_resource_type=Patient.get_resource_type(),
         beneficiary_resource_id=patient_id,
         coverage_type=coverage_type,
-        status="active",
+        status=coverage_status,
+        kind="insurance",
         policy_identifier=policy_identifier,
         coverage_type_display=coverage_type_display,
         subscriber_id=subscriber_id,
         start_date=start_date,
         end_date=end_date,
     )
-    # Enviamos el recurso de cobertura al servidor HAPI FHIR
-    created_id = send_resource_to_hapi_fhir(coverage_resource)
-    # Leemos el recurso de cobertura del servidor HAPI FHIR
-    if not created_id:
-        print("Error al crear la cobertura")
+    if edited_coverage_id:
+        # Si se está editando una cobertura existente, asignamos el ID
+        coverage_resource.id = edited_coverage_id
+        print(f"Editando la cobertura con ID {edited_coverage_id}...")
+        if not edit_resource_in_hapi_fhir(coverage_resource):
+            print("Error al editar la cobertura")
+        else:
+            print("Cobertura editada exitosamente")
+            print("Detalles de la cobertura:")
+            resource = get_resource_from_hapi_fhir(coverage_resource.id, Coverage.get_resource_type())
+            for key, value in resource.items():
+                print(f"{key}: {value}")
     else:
-        print("Cobertura creada exitosamente")
-        print("Detalles de la cobertura:")
-        resource = get_resource_from_hapi_fhir(created_id, Coverage.get_resource_type())
-        for key, value in resource.items():
-            print(f"{key}: {value}")
+        # Enviamos el recurso de cobertura al servidor HAPI FHIR
+        created_id = send_resource_to_hapi_fhir(coverage_resource)
+        # Leemos el recurso de cobertura del servidor HAPI FHIR
+        if not created_id:
+            print("Error al crear la cobertura")
+        else:
+            print("Cobertura creada exitosamente")
+            print("Detalles de la cobertura:")
+            resource = get_resource_from_hapi_fhir(created_id, Coverage.get_resource_type())
+            for key, value in resource.items():
+                print(f"{key}: {value}")
+
+
+def show_patient_coverages() -> None:
+    """
+    Muestra las coberturas asociadas a un paciente dado su ID.
+    :param patient_id: El ID del paciente.
+    """
+    patient_dni = input_dni()
+    patient_resources = get_resource_by_identifier(patient_dni, Patient.get_resource_type())
+    if not patient_resources:
+        print(f"No se encontró el paciente con DNI {patient_dni}.")
+        return
+    patient_resource = patient_resources[0]
+    patient_id = patient_resource.id
+    if not patient_id:
+        print(f"Error: El paciente con DNI {patient_dni} no tiene un ID válido.")
+        return
+    coverage_resources = get_coverage_by_beneficiary(
+        beneficiary_resource_type=Patient.get_resource_type(),
+        beneficiary_resource_id=patient_id
+    )
+    if not coverage_resources:
+        print(f"No se encontraron coberturas para el paciente con DNI {patient_dni}.")
+    else:
+        print(f"Coberturas encontradas para el paciente con DNI {patient_dni}:")
+        for coverage in coverage_resources:
+            for key, value in coverage.model_dump().items():
+                print(f"{key}: {value}")
 
 
 def main():
@@ -239,18 +371,21 @@ def main():
     print("Bienvenido al sistema de gestión de pacientes FHIR")
     while True:
         print("\nSeleccione una opción:")
-        print("1. Crear paciente")
+        print("1. Crear o editar paciente")
         print("2. Buscar paciente por DNI")
-        print("3. Agregar cobertura a un paciente")
-        print("4. Salir")
-        choice = input("Ingrese su opción (1-4): ").strip()
+        print("3. Agregar o editar las coberturas de un paciente")
+        print("4. Mostrar coberturas de un paciente")
+        print("5. Salir")
+        choice = input("Ingrese su opción (1-5): ").strip()
         if choice == "1":
-            create_patient()
+            create_or_edit_patient()
         elif choice == "2":
             search_patient_by_dni()
         elif choice == "3":
-            add_patient_coverage()
+            add_or_edit_patient_coverages()
         elif choice == "4":
+            show_patient_coverages()
+        elif choice == "5":
             print("Saliendo del sistema...")
             break
         else:

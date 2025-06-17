@@ -18,6 +18,7 @@ def create_coverage_resource(
     beneficiary_resource_type: str,
     beneficiary_resource_id: str,
     status: str = "active",
+    kind: str = "insurance",
     policy_identifier: Optional[str] = None,
     coverage_type_display: Optional[str] = None,
     subscriber_id: Optional[str] = None,
@@ -26,17 +27,16 @@ def create_coverage_resource(
 ) -> Coverage:
     """
     Crea un recurso FHIR Coverage con los parámetros proporcionados.
-    
-    :param status: Estado de la cobertura (active, cancelled, draft, entered-in-error).
-    :param policy_identifier: Número de póliza o identificador de la cobertura.
-    :param coverage_type: Código del tipo de cobertura (ej: 'EHCPOL' para póliza de salud).
+    :param coverage_type: Tipo de cobertura (ejemplo: 'health', 'dental').
+    :param beneficiary_resource_type: Tipo de recurso del beneficiario (ejemplo: 'Patient').
+    :param beneficiary_resource_id: ID del recurso del beneficiario.
+    :param status: Estado de la cobertura (ejemplo: 'active', 'inactive').
+    :param kind: Tipo de cobertura (ejemplo: 'insurance', 'self-paid').
+    :param policy_identifier: Identificador de la póliza de seguro.
     :param coverage_type_display: Descripción del tipo de cobertura.
     :param subscriber_id: ID del suscriptor de la póliza.
-    :param start_date: Fecha de inicio de la cobertura (formato YYYY-MM-DD).
-    :param end_date: Fecha de fin de la cobertura (formato YYYY-MM-DD).
-    :param reference_resource_type: Tipo de recurso referenciado (ej: 'Patient', 'Organization').
-    :param reference_resource_id: ID del recurso referenciado.
-    :param payor_name: Nombre del pagador/asegurador.
+    :param start_date: Fecha de inicio de la cobertura (formato ISO 8601).
+    :param end_date: Fecha de finalización de la cobertura (formato ISO 8601).
     :return: Un recurso FHIR de tipo Coverage.
     """
     type_concept = CodeableConcept()
@@ -50,12 +50,10 @@ def create_coverage_resource(
     beneficiary_ref.reference = f"{beneficiary_resource_type}/{beneficiary_resource_id}"
     coverage = Coverage(
         status=status,
-        kind="insurance",
+        kind=kind,
         type=type_concept,
         beneficiary=beneficiary_ref
         )
-    # Establecer el estado de la cobertura
-    coverage.status = status
     # Agregar identificador de póliza si está disponible
     if policy_identifier:
         identifier = Identifier()
